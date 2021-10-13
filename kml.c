@@ -12,6 +12,43 @@
 
 SDL_Surface *marker;
 Placemark *places = NULL;
+char txtbuf[32768];
+
+char *desc2txt(char *s)
+{
+	static char buf[1032];
+	int i,j,k;
+	char *p,*q;
+
+	strncpy(buf,s,1031);
+	buf[1031] = 0;
+	p = buf;
+	while (p = strstr(p, "&#160;")){
+		*p++ = ' ';
+		q =p+5;
+		strcpy(p,q);
+	}
+	return(buf);
+}
+
+char *kml2txt(char *s)
+{
+	static char buf[1032];
+	int i,j,k;
+	char *p,*q;
+
+	j = strlen(s); if (j >1031) j = 1031;
+	q = buf;
+	for (p = s; p<s+j; p++){
+		if ((*p == '('))
+			*q++ = '\n';
+		// Should look for "Partial toll road", "Toll road", "Speed camera"
+		// and add newline, parens.
+		*q++ = *p;
+	}
+	*q = 0;
+	return(buf);
+}
 
 void placemark_parse(xmlNode *node, Placemark *place)
 {
@@ -25,6 +62,13 @@ void placemark_parse(xmlNode *node, Placemark *place)
 			place->description = strdup((char *) cur->children->content);
 		if (strcmp((char *) cur->name, "Point") == 0)
 		{
+			char *s = txtbuf+strlen(txtbuf);
+			if (place->name)
+				sprintf(s+strlen(s),"%s\n",kml2txt(place->name));
+			if (place->description) 
+				sprintf(s+strlen(s)," %s\n",desc2txt(place->description));
+			//printf(s);
+
 			/* parse point */
 			place->type = PLACEMARK_POINT;
 			place->point = malloc(sizeof(PlacemarkPoint));
@@ -54,6 +98,7 @@ void placemark_parse(xmlNode *node, Placemark *place)
 
 void kml_parse(char *file)
 {
+#ifdef LIBXML_TEST_VERSION
 	xmlDoc *doc = NULL;
 	xmlNode *node, *cur;
 
@@ -87,25 +132,28 @@ void kml_parse(char *file)
 	for (cur = node; cur; cur = cur->next)
 		if (strcmp((char *) cur->name, "Placemark") == 0)
 		{
-			Placemark *tmp = malloc(sizeof(Placemark));
+			Placemark *tmp = calloc(1,sizeof(Placemark));
 			placemark_parse(cur, tmp);
 			tmp->next = places;
 			places = tmp;
 		}
+	strcat(txtbuf," \n");
 	
 	xmlFreeDoc(doc);
+#endif
 }
 
 void kml_load()
 {
+#ifdef LIBXML_TEST_VERSION
 	DIR *directory;
 	struct dirent *entry;
 	char file[100];
 	SDL_Surface *default_marker;
-	
+
 	LIBXML_TEST_VERSION
 	xmlKeepBlanksDefault(0);
-	
+
 	/* default marker */
 	default_marker = IMG_Load("data/marker.png");
 	
@@ -127,8 +175,9 @@ void kml_load()
 				sprintf(file, "kml/%s.kml", entry->d_name);
 				kml_parse(file);
 			}
-	
+
 	xmlCleanupParser();
+#endif
 }
 
 void kml_free()
@@ -144,8 +193,10 @@ void kml_free()
 
 void kml_display(SDL_Surface *dst, float x, float y, int z)
 {
+#if 0 // Someday maybe I should separate this from gmapjson_display()
 	Placemark *place = places;
 	float nx, ny;
+
 	while (place)
 	{
 		switch (place->type)
@@ -184,4 +235,5 @@ void kml_display(SDL_Surface *dst, float x, float y, int z)
 		}
 		place = place->next;
 	}
+#endif
 }

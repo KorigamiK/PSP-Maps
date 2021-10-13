@@ -1,0 +1,39 @@
+#CFLAGS = -O2 -g
+CFLAGS += -O2 -g -DGP2X -DZIPIT_Z2 -DZIPIT_Z2_UTF8
+SDLCONFIG ?= sdl-config
+CURLCONFIG ?= curl-config
+#XML2CONFIG ?= xml2-config
+XML2CONFIG ?= pkg-config
+LDFLAGS ?=
+#LIBS = -lSDL_image -lSDL_gfx -lSDL_ttf -lSDL_rtf -lpng -ljpeg -lcurl -lfreetype -lm
+LIBS = ./libSDL_rtf.a -lSDL_image -lSDL_gfx -lSDL_ttf -lpng -ljpeg -lcurl -lfreetype -lm
+
+pspmaps: pspmaps.c $(ICON) global.o kml.o tile.c io.c gmapjson.o cJSON.o showrtf.o gpsplugin.o minmea.o
+	$(CC) $(CFLAGS) -o pspmaps$(EXT) pspmaps.c $(ICON) global.o kml.o gmapjson.o showrtf.o cJSON.o gpsplugin.o minmea.o $(LIBS) `$(CURLCONFIG) --cflags --libs` `$(SDLCONFIG) --cflags --libs` `$(XML2CONFIG) --libs libxml-2` $(LDFLAGS) 
+
+global.o: global.c global.h
+	$(CC) $(CFLAGS) -c global.c
+
+kml.o: kml.c kml.h
+	$(CC) $(CFLAGS) -c kml.c `$(SDLCONFIG) --cflags` `$(XML2CONFIG) --cflags libxml-2`
+
+gmapjson.o: gmapjson.c gmapjson.h
+	$(CC) $(CFLAGS) -c gmapjson.c `$(SDLCONFIG) --cflags`
+
+showrtf.o: showrtf.c
+	$(CC) $(CFLAGS) -c showrtf.c `$(SDLCONFIG) --cflags`
+
+cJSON.o: cJSON.c cJSON.h
+	$(CC) $(CFLAGS) -c cJSON.c
+
+gpsplugin.o: gpsplugin.c
+	$(CC) $(CFLAGS) -c gpsplugin.c
+
+minmea.o: minmea.c
+	$(CC) $(CFLAGS) -c minmea.c
+
+icon.o: icon.rc
+	$(WINDRES) -i icon.rc -o icon.o
+
+clean:
+	rm -rf pspmaps pspmaps.exe *.o PSP-Maps.prx PSP-Maps.elf PARAM.SFO EBOOT.PBP pspmaps.gpu cache/ data/*.dat kml/ gmapjson/

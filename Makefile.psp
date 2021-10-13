@@ -19,7 +19,7 @@ PSP_EBOOT_PIC1 = screenshot.png
 PSPSDK=$(shell psp-config --pspsdk-path)
 PSPBIN = $(PSPSDK)/../bin
 
-CFLAGS += -I/usr/local/pspdev/psp/include/SDL $(shell $(PSPBIN)/curl-config --cflags) $(shell $(PSPBIN)/xml2-config --cflags)
+CFLAGS += -I$(shell psp-config --pspdev-path)/psp/include/SDL $(shell $(PSPBIN)/curl-config --cflags) $(shell $(PSPBIN)/xml2-config --cflags)
 
 LIBS = -lmotion_driver -lc -lSDL_image -lSDL_gfx -lSDL_ttf -lSDL_mixer -lpng -ljpeg -lSDL -lcurl -lfreetype
 LIBS += $(shell $(PSPBIN)/sdl-config --libs)

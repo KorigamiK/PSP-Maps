@@ -22,6 +22,8 @@
 
 #include "global.h"
 #include "kml.h"
+#include "gmapjson.h"
+
 
 #include <math.h>
 #include <stdlib.h>
@@ -34,11 +36,16 @@
 #include <SDL_rotozoom.h>
 #include <SDL_gfxPrimitives.h>
 #include <SDL_ttf.h>
-#include <SDL_mixer.h>
+//#include <SDL_mixer.h>
 #include <curl/curl.h>
 
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+int DEFAULT_MAP = 0;
+int DEFAULT_CHEAT_MAP = 18;
+#else
 #define DEFAULT_MAP 0
 #define DEFAULT_CHEAT_MAP 18
+#endif
 
 #define BPP 32
 #define BUFFER_SIZE 200 * 1024
@@ -85,9 +92,10 @@ TTF_Font *font;
 CURL *curl;
 char response[BUFFER_SIZE];
 int motion_loaded, gps_loaded, dat_loaded = 0;
+int netOff = 0;
 
 /* x, y, z are in Google's format: z = [ -4 .. 16 ], x and y = [ 1 .. 2^(17-z) ] */
-int z = 16, s = DEFAULT_MAP;
+int z = 16, s = 0; // DEFAULT_MAP;
 float x = 1, y = 1, dx, dy;
 int active = 0, fav = 0, balancing = 0, cache_zoom = 3;
 
@@ -108,10 +116,16 @@ struct _disk
 } *disk;
 int disk_idx = 0;
 
+#ifdef GOOGLEMAPS_API2
 /* this is the Google Maps API key used for address search
  * this one was created for a dummy domain
  * if it does not work, put your own Google Maps API key here */
 char gkey[100] = "ABQIAAAAAslNJJmKiyq8-oFeyctp9xSFOvRczLyAyj57qAvViVrKq19E6hQUo2EXzTDJCL7m3VQT1DNUPzUWAw";
+#else
+///char locurl[1024] = "http://maps.google.com/maps/geo?output=csv&key=%s&q=%s";
+//char locurl[1024] = "http://maps.googleapis.com/maps/api/geocode/xml?address=%s";
+char locurl[1024] = "http://maps.googleapis.com/maps/api/geocode/json?address=%s";
+#endif
 
 /* user's configuration */
 struct
@@ -123,6 +137,9 @@ struct
 	int show_kml;
 	int cheat;
 	int follow_gps;
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+	int last_service;
+#endif
 } config;
 
 /* user's favorite places */
@@ -210,6 +227,16 @@ enum
 	PSP_BUTTON_LEFT = 2,
 	PSP_BUTTON_DOWN = 4,
 	PSP_BUTTON_RIGHT = 6,
+#ifdef ZIPIT_Z2
+	PSP_BUTTON_SELECT = 7, 
+	PSP_BUTTON_START = SDLK_TAB, // = 8
+	PSP_BUTTON_X = SDLK_SPACE, // SDLK_TAB = 9
+	PSP_BUTTON_R = SDLK_PERIOD,
+	PSP_BUTTON_L = SDLK_COMMA,
+	PSP_BUTTON_A = SDLK_RETURN, // 13
+	PSP_BUTTON_Y = SDLK_HOME, // 44
+	PSP_BUTTON_B = SDLK_END, //46
+#else
 	PSP_BUTTON_START = 8,
 	PSP_BUTTON_SELECT = 9,
 	PSP_BUTTON_L = 10,
@@ -218,6 +245,7 @@ enum
 	PSP_BUTTON_A = 13,
 	PSP_BUTTON_B = 14,
 	PSP_BUTTON_X = 15,
+#endif
 	PSP_NUM_BUTTONS
 };
 #else
@@ -266,14 +294,51 @@ enum
 	MENU_KML,
 	MENU_GPS,
 	MENU_EFFECT,
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+	MENU_OFFLINE,
+	MENU_CACHEZOOM,
+	MENU_CACHESIZE,
+	MENU_CACHEOUT,
+	MENU_CHEAT,
+#else
 	MENU_KEYBOARD,
 	MENU_CACHEZOOM,
 	MENU_CACHESIZE,
 	MENU_CHEAT,
 	MENU_EXIT,
+#endif
 	MENU_QUIT,
 	MENU_NUM
 };
+
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+int cacheout = 1;
+char *_cacheops[3] = {
+	"clear",
+	"copy to offline",
+	"move to offline"
+};
+#endif
+
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+void next_service()
+{
+	do {
+		s++;
+		if (s > (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1) 
+			s = (config.cheat?NORMAL_VIEWS+1:0);
+	} while (_url[s][0] == '#');
+}
+	
+void prev_service()
+{
+	do {
+		s--;
+		if (s < (config.cheat?NORMAL_VIEWS+1:0)) 
+			s = (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1;
+	} while (_url[s][0] == '#');
+}
+#endif
 
 /* quit */
 void quit()
@@ -294,6 +359,9 @@ void quit()
 		/* save configuration */
 		if ((f = fopen("data/config.dat", "wb")) != NULL)
 		{
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+			config.last_service = s;
+#endif
 			fwrite(&config, sizeof(config), 1, f);
 			fclose(f);
 		}
@@ -316,8 +384,13 @@ void quit()
 	#ifdef _PSP_FW_VERSION
 	sceKernelExitGame();
 	#else
+	{
+	extern int GPS_thread_quit(void);
 	printf("quit!\n");
+	GPS_thread_quit();
+	printf("done.\n");
 	exit(0);
+	}
 	#endif
 }
 
@@ -467,7 +540,11 @@ void info()
 	lat = atan(exp(M_PI - lat)) / M_PI * 360 - 90;
 	hlineRGBA(screen, 0, WIDTH, 16, 255, 255, 255, 255);
 	boxRGBA(screen, 0, 0, WIDTH, 15, 0, 0, 0, 200);
+#ifdef ZIPIT_Z2
+	sprintf(temp, "Lat %7.3f | Lon %7.3f | %3.1d%% | %s", lat, lon, 100*(16-z)/20, _view[s]);
+#else
 	sprintf(temp, "Lat: %10.6f | Lon: %10.6f | Zoom: %3.1d%% | Type: %s", lat, lon, 100*(16-z)/20, _view[s]);
+#endif
 	print(screen, 5, 0, temp);
 }
 
@@ -544,9 +621,30 @@ void display(int fx)
 	/* show informations */
 	if (config.show_info) info();
 	if (config.show_kml) kml_display(screen, x, y, z);
+	if (config.show_kml) gmapjson_display(screen, x, y, z);
 	
 	SDL_Flip(screen);
 }
+
+#ifdef ZIPIT_Z2
+latin2utf8(char *src, char *dst, int max)
+{
+  int i;
+  int j = 0;
+  for (i = 0; i < strlen(src); i++)
+  {
+    /* 0xff00 would pass 8bit latin1, but ttf font wont.*/
+    if ((src[i] & 0x80) == 0) // ASCII
+      dst[j++] = src[i];
+    else // Latin1 char.  Convert to UTF-8
+    {
+      dst[j++] = (0xC0 | (src[i] >>6));
+      dst[j++] = (0x80 | (src[i] & 0x3F));
+    }
+  }
+  dst[j] = '\0';
+}
+#endif
 
 /* lookup address */
 void go()
@@ -568,12 +666,32 @@ void go()
 	};
 	
 	box(next, WIDTH/2, HEIGHT/2 - 60, 400, 80, 200);
+#ifdef ZIPIT_Z2
+	print(next, 50, HEIGHT/2 - 90, "Enter address: ");
+#else
 	print(next, 50, HEIGHT/2 - 90, "Enter address, up/down to change letters, start to validate: ");
+#endif
 	input(next, 50, HEIGHT/2 - 60, buffer, 46);
+#ifdef ZIPIT_Z2
+	/* Strip off trailing spaces */
+	while (buffer[strlen(buffer)-1] == ' ')
+	  buffer[strlen(buffer)-1] = 0;
+	/* Convert Latin1 in URL to UTF-8 to conform to RFC 3986 from 2005. */
+	latin2utf8(buffer, request, 100);
+
+	DEBUG("address: %s\n", buffer);
+	address = curl_escape(request, 0);
+#else
 	DEBUG("address: %s\n", buffer);
 	address = curl_escape(buffer, 0);
+#endif
 	
+#ifdef GOOGLEMAPS_API2
 	sprintf(request, "http://maps.google.com/maps/geo?output=csv&key=%s&q=%s", gkey, address);
+#else
+	/* Google geocoding API V3 keys now require https, so try it without a key.*/
+	sprintf(request, locurl, address);
+#endif
 	free(address);
 	
 	rw = SDL_RWFromMem(response, BUFFER_SIZE);
@@ -586,6 +704,7 @@ void go()
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10);
 	curl_easy_perform(curl);
 	
+#ifdef GOOGLEMAPS_API2
 	ret = sscanf(response, "%d,%d,%f,%f", &code, &precision, &lat, &lon);
 	
 	if (ret == 4 && code == 200)
@@ -594,6 +713,9 @@ void go()
 		z = _zoom[precision];
 		latlon2xy(lat, lon, &x, &y, z);
 	}
+#else
+	gmapjson_location(response, &x, &y, &z);
+#endif
 	
 	SDL_RWclose(rw);
 }
@@ -607,24 +729,56 @@ void directions()
 	box(next, WIDTH/2, HEIGHT/2 - 60, 400, 80, 200);
 	print(next, 50, HEIGHT/2 - 90, "Enter departure address: ");
 	input(next, 50, HEIGHT/2 - 60, buffer, 46);
+#ifdef ZIPIT_Z2
+	/* Strip off trailing spaces */
+	while (buffer[strlen(buffer)-1] == ' ')
+	  buffer[strlen(buffer)-1] = 0;
+	/* Convert Latin1 in URL to UTF-8 to conform to RFC 3986 from 2005. */
+	latin2utf8(buffer, request, 100);
+
+	DEBUG("address: %s\n", buffer);
+	departure = curl_escape(request, 0);
+#else
 	DEBUG("departure: %s\n", buffer);
 	departure = curl_escape(buffer, 0);
-	
+#endif	
 	box(next, WIDTH/2, HEIGHT/2 - 60, 400, 80, 200);
 	print(next, 50, HEIGHT/2 - 90, "Enter destination address: ");
 	input(next, 50, HEIGHT/2 - 60, buffer, 46);
+#ifdef ZIPIT_Z2
+	/* Strip off trailing spaces */
+	while (buffer[strlen(buffer)-1] == ' ')
+	  buffer[strlen(buffer)-1] = 0;
+	/* Convert Latin1 in URL to UTF-8 to conform to RFC 3986 from 2005. */
+	latin2utf8(buffer, request, 100);
+
+	DEBUG("address: %s\n", buffer);
+	destination = curl_escape(request, 0);
+#else
 	DEBUG("destination: %s\n", buffer);
 	destination = curl_escape(buffer, 0);
-	
+#endif	
+#ifdef GOOGLEMAPS_API2
 	sprintf(request, "http://maps.google.com/maps?output=kml&saddr=%s&daddr=%s", departure, destination);
+#else
+	sprintf(request, "http://maps.googleapis.com/maps/api/directions/json?origin=%s&destination=%s", departure, destination);
+#endif	
 	free(departure);
 	free(destination);
 	
+#ifdef GOOGLEMAPS_API2
 	if ((kml = fopen("kml/route.kml", "w")) == NULL)
 	{
 		DEBUG("cannot open/create kml/route.kml\n");
 		return;
 	}
+#else
+	if ((kml = fopen("kml/route.json", "w")) == NULL)
+	{
+		DEBUG("cannot open/create kml/route.json\n");
+		return;
+	}
+#endif
 	
 	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0");
@@ -639,6 +793,7 @@ void directions()
 	/* reload KML files */
 	kml_free();
 	kml_load();
+	gmapjson_load();
 	
 	/* force KML display */
 	config.show_kml = 1;
@@ -666,9 +821,16 @@ void menu_update(int cache_size)
 	pos.x = MENU_LEFT-80;
 	pos.y = 0;
 	SDL_BlitSurface(logo, NULL, next, &pos);
+#ifdef GOOGLEMAPS_API2
 	print(next, MENU_LEFT+120, 10, "version " VERSION);
 	print(next, MENU_LEFT+120, 25, "http://royale.zerezo.com/psp/");
 	print(next, MENU_LEFT+120, 40, "http://github.com/GameMaker2k/");
+#else
+	// Original code has not kept up with google API changes, so...
+	print(next, MENU_LEFT+120, 10, "version " VERSION);
+	print(next, MENU_LEFT+120, 25, "https://github.com");
+	print(next, MENU_LEFT+120, 40, " /korigamik/PSP-Maps");
+#endif
 	print(next, MENU_LEFT-20, MENU_TOP + active * MENU_Y, ">");
 	ENTRY(MENU_VIEW, "Current view: %s", _view[s]);
 	ENTRY(MENU_ADDRESS, "Enter address...");
@@ -680,15 +842,130 @@ void menu_update(int cache_size)
 	ENTRY(MENU_KML, "Show KML data: %s", config.show_kml ? "Yes" : "No");
 	ENTRY(MENU_GPS, "Center map on GPS: %s", config.follow_gps ? "Yes" : "No");
 	ENTRY(MENU_EFFECT, "Transition effects: %s", config.use_effects ? "Yes" : "No");
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+	ENTRY(MENU_OFFLINE, "Offline only: %s", netOff ? "Yes" : "No");
+	ENTRY(MENU_CACHEZOOM, "Cache zoom levels: %d", cache_zoom);
+	ENTRY(MENU_CHEAT, "Switch to sky/moon/mars: %s", config.cheat ? "Yes" : "No");
+	ENTRY(MENU_CACHESIZE, "Cache size: %d (~ %d MB)", cache_size, cache_size * 20 / 1000);
+	ENTRY(MENU_CACHEOUT, "Cache: %s", _cacheops[cacheout]);
+#else
 	ENTRY(MENU_KEYBOARD, "Keyboard type: %s", config.danzeff ? "Danzeff" : "Arcade");
 	ENTRY(MENU_CACHEZOOM, "Cache zoom levels: %d", cache_zoom);
 	ENTRY(MENU_CHEAT, "Switch to sky/moon/mars: %s", config.cheat ? "Yes" : "No");
 	ENTRY(MENU_CACHESIZE, "Cache size: %d (~ %d MB)", cache_size, cache_size * 20 / 1000);
 	ENTRY(MENU_EXIT, "Exit menu");
+#endif
 	ENTRY(MENU_QUIT, "Quit PSP-Maps");
 	SDL_BlitSurface(next, NULL, screen, NULL);
 	SDL_Flip(screen);
 }
+
+void cache_resize(int cache_size)
+{
+	int i;
+	int old;
+	old = config.cache_size;
+	printf("cache_resize(%d  => %d) idx = %d\n", old, cache_size, disk_idx);
+	config.cache_size = cache_size;
+	/* remove data on disk if needed */
+	box(next, WIDTH/2, HEIGHT/2, 400, 70, 200);
+	print(next, 50, HEIGHT/2 - 30, "Cleaning cache...");
+	for (i = config.cache_size; i < disk_idx; i++)
+	{
+		char name[50];
+		float ratio = 1.0 * (i - config.cache_size) / (disk_idx - config.cache_size);
+		boxRGBA(next, WIDTH/2 - 180, HEIGHT/2, WIDTH/2 - 180 + 360.0 * ratio, HEIGHT/2 + 15, 255, 0, 0, 255);
+		diskname(name, i);
+		printf("Unlink cache file%d: %s\n", i, name);
+		unlink(name);
+		SDL_BlitSurface(next, NULL, screen, NULL);
+		SDL_Flip(screen);
+	}
+	disk = realloc(disk, sizeof(struct _disk) * config.cache_size);
+	/* clear newly allocated memory if needed */
+	if (config.cache_size > old)
+		bzero(&disk[old], sizeof(struct _disk) * (config.cache_size - old));
+	else if (disk_idx >= config.cache_size)
+		disk_idx = 0;
+}
+
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+void mkpath(char *dir)
+{
+	char tmp[256];
+	char *p = NULL;
+	size_t len;
+	
+	snprintf(tmp, sizeof(tmp),"%s",dir);
+	len = strlen(tmp);
+	if(tmp[len - 1] == '/')
+		tmp[len - 1] = 0;
+	for(p = tmp + 1; *p; p++)
+		if(*p == '/') {
+			*p = 0;
+			mkdir(tmp, S_IRWXU);
+			*p = '/';
+		}
+	mkdir(tmp, S_IRWXU);
+}
+
+void export_cache(int mv)
+{
+	int i;
+	FILE *infile, *outfile;
+	char cachename[50];
+	char name[256];
+	char buffer[BUFFER_SIZE];
+
+	box(next, WIDTH/2, HEIGHT/2, 400, 70, 200);
+	print(next, 50, HEIGHT/2 - 30, "Extracting cache...");
+	for (i = 0; i < disk_idx; i++)
+	{
+		int x = disk[i].x;
+		int y = disk[i].y;
+		int z = disk[i].z;
+		int s = disk[i].s;
+		float ratio = 1.0 * i / disk_idx;
+
+		if ((_offline[s] == NULL) || !strlen(_offline[s]))
+			continue;
+
+		boxRGBA(next, WIDTH/2 - 180, HEIGHT/2, WIDTH/2 - 180 + 360.0 * ratio, HEIGHT/2 + 15, 255, 0, 0, 255);
+		SDL_BlitSurface(next, NULL, screen, NULL);
+		SDL_Flip(screen);
+
+		diskname(cachename, i);
+		sprintf(name, "offline/%s/%d/%d/", _offline[s], 17-z, x, y);
+		mkpath(name); /* create folders if needed */
+		sprintf(name, "offline/%s/%d/%d/%d.png", _offline[s], 17-z, x, y);
+		if (mv && !rename(cachename, name)){
+			printf("Rename cache file %d to %s\n", i, name);
+			mv++;
+			continue;
+		}
+		if ((infile = fopen(cachename, "rb")) != NULL) {
+			if ((outfile = fopen(name, "wb")) != NULL)
+			{
+				int n;
+				while (0 < (n = fread(buffer, 1, sizeof(buffer), infile)))
+					fwrite(buffer, 1, n, outfile);
+				fclose(outfile);
+			}
+			else printf("Cannot open %s\n",name);
+			fclose(infile);
+			if (mv) {// rename must have failed.  Try copy/unlink instead.
+				unlink(cachename);
+				mv++;
+			}
+		}
+		else printf("Cannot read %s\n",cachename);
+
+		printf("Export cache file %d to %s\n", i, name);
+	}
+	if (mv > 1) // Reset cache index if we actually moved ANY files.
+		disk_idx = 0;
+}
+#endif
 
 /* menu to load/save favorites */
 void menu()
@@ -732,7 +1009,11 @@ void menu()
 						case SDLK_LALT:
 						case PSP_BUTTON_START:
 							return;
+#ifdef ZIPIT_Z2
+							// PSP_BUTTON_X is set to SPACE on zipit.
+#else
 						case SDLK_SPACE:
+#endif
 						case PSP_BUTTON_B:
 						case PSP_BUTTON_A:
 						case PSP_BUTTON_Y:
@@ -791,10 +1072,19 @@ void menu()
 								case MENU_EFFECT:
 									config.use_effects = !config.use_effects;
 									break;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								/* Off the network */
+								case MENU_OFFLINE:
+									netOff = !netOff;
+									if (!netOff) /* clear memory cache */
+									  bzero(memory, sizeof(memory));
+									break;
+#else
 								/* keyboard */
 								case MENU_KEYBOARD:
 									config.danzeff = !config.danzeff;
 									break;
+#endif
 								/* zoom cache */
 								case MENU_CACHEZOOM:
 									box(next, WIDTH/2, HEIGHT/2, 400, 70, 200);
@@ -824,6 +1114,7 @@ void menu()
 											gettile(i, j, z-k, s);
 											SDL_BlitSurface(next, NULL, screen, NULL);
 											SDL_Flip(screen);
+
 										}
 									}
 									break;
@@ -836,34 +1127,28 @@ void menu()
 								/* disk cache */
 								case MENU_CACHESIZE:
 									if (config.cache_size != cache_size)
-									{
-										int old;
-										old = config.cache_size;
-										config.cache_size = cache_size;
-										/* remove data on disk if needed */
-										box(next, WIDTH/2, HEIGHT/2, 400, 70, 200);
-										print(next, 50, HEIGHT/2 - 30, "Cleaning cache...");
-										for (i = config.cache_size; i < disk_idx; i++)
-										{
-											char name[50];
-											float ratio = 1.0 * (i - config.cache_size) / (disk_idx - config.cache_size);
-											boxRGBA(next, WIDTH/2 - 180, HEIGHT/2, WIDTH/2 - 180 + 360.0 * ratio, HEIGHT/2 + 15, 255, 0, 0, 255);
-											diskname(name, i);
-											unlink(name);
-											SDL_BlitSurface(next, NULL, screen, NULL);
-											SDL_Flip(screen);
-										}
-										disk = realloc(disk, sizeof(struct _disk) * config.cache_size);
-										/* clear newly allocated memory if needed */
-										if (config.cache_size > old)
-											bzero(&disk[old], sizeof(struct _disk) * (config.cache_size - old));
-									}
+										cache_resize(cache_size);
 									break;
 								/* exit menu */
 								case MENU_VIEW:
 								/* view */
+									return;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								case MENU_CACHEOUT:
+									if (cacheout) {
+										printf("Exporting cache...\n");
+										export_cache(cacheout-1);
+									}
+									else {
+										printf("wiping cache...\n");
+										cache_resize(0);
+										cache_resize(cache_size);
+									}
+									break;
+#else
 								case MENU_EXIT:
 									return;
+#endif
 								/* quit PSP-Maps */
 								case MENU_QUIT:
 									quit();
@@ -877,8 +1162,12 @@ void menu()
 							{
 								/* view */
 								case MENU_VIEW:
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+									prev_service();
+#else
 									s--;
 									if (s < (config.cheat?NORMAL_VIEWS+1:0)) s = (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1;
+#endif
 									break;
 								/* favorites */
 								case MENU_LOAD:
@@ -902,10 +1191,19 @@ void menu()
 								case MENU_EFFECT:
 									config.use_effects = !config.use_effects;
 									break;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								/* Off the network */
+								case MENU_OFFLINE:
+									netOff = !netOff;
+									if (!netOff) /* clear memory cache */
+									  bzero(memory, sizeof(memory));
+									break;
+#else
 								/* keyboard */
 								case MENU_KEYBOARD:
 									config.danzeff = !config.danzeff;
 									break;
+#endif
 								/* zoom cache */
 								case MENU_CACHEZOOM:
 									cache_zoom--;
@@ -923,6 +1221,11 @@ void menu()
 									if (cache_size == 0) cache_size = MAX_CACHESIZE;
 									if (cache_size < 100) cache_size = 0;
 									break;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								case MENU_CACHEOUT:
+									if (--cacheout < 0)	cacheout = 2;
+									break;
+#endif
 							}
 							menu_update(cache_size);
 							break;
@@ -933,8 +1236,12 @@ void menu()
 							{
 								/* view */
 								case MENU_VIEW:
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+									next_service();
+#else
 									s++;
 									if (s > (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1) s = (config.cheat?NORMAL_VIEWS+1:0);
+#endif
 									break;
 								/* favorites */
 								case MENU_LOAD:
@@ -958,10 +1265,19 @@ void menu()
 								case MENU_EFFECT:
 									config.use_effects = !config.use_effects;
 									break;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								/* Off the network */
+								case MENU_OFFLINE:
+									netOff = !netOff;
+									if (!netOff) /* clear memory cache */
+									  bzero(memory, sizeof(memory));
+									break;
+#else
 								/* keyboard */
 								case MENU_KEYBOARD:
 									config.danzeff = !config.danzeff;
 									break;
+#endif
 								/* zoom cache */
 								case MENU_CACHEZOOM:
 									cache_zoom++;
@@ -979,6 +1295,11 @@ void menu()
 									if (cache_size == 0) cache_size = 100;
 									if (cache_size > MAX_CACHESIZE) cache_size = 0;
 									break;
+#ifdef ZIPIT_Z2 /* ENABLE_OFFLINE_EXPORT */
+								case MENU_CACHEOUT:
+									if (++cacheout > 2)	cacheout = 0;
+									break;
+#endif
 							}
 							menu_update(cache_size);
 							break;
@@ -1005,7 +1326,7 @@ void menu()
 }
 
 /* init */
-void init()
+void init(int favNum)
 {
 	int flags;
 	FILE *f;
@@ -1023,6 +1344,9 @@ void init()
 	config.danzeff = 1;
 	config.cheat = 0;
 	config.follow_gps = 1;
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+	config.last_service = DEFAULT_MAP;
+#endif
 	
 	/* load configuration if available */
 	if ((f = fopen("data/config.dat", "rb")) != NULL)
@@ -1033,7 +1357,7 @@ void init()
 	
 	/* switch to sky if needed */
 	if (config.cheat) s = DEFAULT_CHEAT_MAP;
-	
+
 	/* allocate disk cache */
 	disk = malloc(sizeof(struct _disk) * config.cache_size);
 	
@@ -1067,32 +1391,79 @@ void init()
 	curl = curl_easy_init();
 	
 	/* setup SDL */
+#ifdef ZIPIT_Z2
+	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) == -1) {
+		printf("SDL_Init() failed.\n");
+		quit();
+	}
+#else
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_AUDIO) == -1)
 		quit();
+#endif
 	joystick = SDL_JoystickOpen(0);
 	SDL_JoystickEventState(SDL_ENABLE);
-	if (TTF_Init() == -1)
+	if (TTF_Init() == -1){
+#ifdef ZIPIT_Z2
+		printf("TTF_Init() failed.\n");
+#endif
 		quit();
-	if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024) < 0)
-		quit();
+	}
+	//if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024) < 0)
+		//quit();
 	
 	/* load urls for services */
 	if ((f = fopen("urls.txt", "r")) == NULL)
 	{
+#ifdef ZIPIT_Z2
+		printf("cannot open urls file!\n");
+#else
 		DEBUG("cannot open urls file!\n");
+#endif
 		quit();
 	}
 	for (i = 0; i < CHEAT_VIEWS; i++) if (i != NORMAL_VIEWS)
 	{
 		if (fscanf(f, "%s", buffer) != 1)
 		{
+#ifdef ZIPIT_Z2
+			printf("cannot read url for %s\n", _view[i]);
+#else
 			DEBUG("cannot read url for %s\n", _view[i]);
+#endif
 			quit();
 		}
 		_url[i] = malloc(strlen(buffer) + 1);
 		strcpy(_url[i], buffer);
 	}
 	fclose(f);
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+	/* Pick some defaults that are NOT commented out in urls.txt file */
+	if (_url[DEFAULT_MAP][0] == '#')
+		for (i = 0; i < NORMAL_VIEWS; i++) {
+			if (_url[DEFAULT_MAP][0] != '#') {
+				DEFAULT_MAP = i; break; }
+		}
+	if (_url[DEFAULT_CHEAT_MAP][0] == '#')
+		for (i = NORMAL_VIEWS+1; i < CHEAT_VIEWS; i++) {
+			if (_url[DEFAULT_CHEAT_MAP][0] != '#') {
+				DEFAULT_CHEAT_MAP = i; break; }
+		}
+	/* Set current service and DEFAULT to current service of last session. */
+	s = config.last_service;
+	s--; next_service(); /* decrement, then next_service ensures its good. */
+	if (config.cheat) DEFAULT_CHEAT_MAP = s;
+	else DEFAULT_MAP = s;
+#endif
+#ifdef GOOGLEMAPS_API2
+#else
+	/* load url for location lookup (so we can add a key later if needed) */
+	if ((f = fopen("locurl.txt", "r")) != NULL)
+	{
+	  if (fscanf(f, "%s", buffer) != 1)
+	    strncpy(locurl, buffer, 1023);
+	  fclose(f);
+	}
+#endif
 	
 	#include "icon.xpm"
 	SDL_WM_SetIcon(IMG_ReadXPMFromArray(icon_xpm), NULL);
@@ -1110,9 +1481,12 @@ void init()
 	prev = zoomSurface(screen, 1, 1, 0);
 	next = zoomSurface(screen, 1, 1, 0);
 	#endif
-	if (screen == NULL)
+	if (screen == NULL) {
+#ifdef ZIPIT_Z2
+		printf("SDL_VideoMode() failed.\n");
+#endif
 		quit();
-	
+	}
 	/* load textures */
 	logo = IMG_Load("data/logo.png");
 	na = IMG_Load("data/na.png");
@@ -1121,7 +1495,17 @@ void init()
 	
 	/* load KML */
 	kml_load();
+	gmapjson_load();
 	
+	if ((favNum >= 0) && (favNum < NUM_FAVORITES) &&  favorite[favNum].ok)
+	{
+	  fav = favNum;
+	  x = favorite[fav].x;
+	  y = favorite[fav].y;
+	  z = favorite[fav].z;
+	  s = favorite[fav].s;
+	}
+
 	/* display initial map */
 	display(FX_FADE);
 }
@@ -1150,6 +1534,12 @@ void loop()
 						action = event.jbutton.button;
 					switch (action)
 					{
+						case SDLK_BACKSPACE:
+							{static int offset=0;
+							offset = show_rtf(screen,"data/font.ttf","/tmp/route.rtf",offset);
+							display(FX_NONE);
+							}
+							break;
 						case SDLK_LEFT:
 						case PSP_BUTTON_LEFT:
 							x -= DIGITAL_STEP;
@@ -1161,7 +1551,7 @@ void loop()
 							display(FX_RIGHT);
 							break;
 						case SDLK_UP:
-						case PSP_BUTTON_UP:
+						// case PSP_BUTTON_UP:
 							y -= DIGITAL_STEP;
 							display(FX_UP);
 							break;
@@ -1199,19 +1589,36 @@ void loop()
 							display(FX_FADE);
 							break;
 						case SDLK_F2:
+#ifdef ZIPIT_Z2
+							// PSP_BUTTON_Y is set to HOME on zipit.
+#else
 						case SDLK_HOME:
+#endif
 						case PSP_BUTTON_Y:
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+							prev_service();
+#else
 							s--;
 							if (s < (config.cheat?NORMAL_VIEWS+1:0)) s = (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1;
+#endif
 							display(FX_FADE);
 							break;
 						case SDLK_F3:
+#ifdef ZIPIT_Z2
+							// PSP_BUTTON_B is set to END on zipit.
+#else
 						case SDLK_END:
+#endif
 						case PSP_BUTTON_B:
+#if 1 /* ZIPIT_Z2 URL_DISABLING */
+							next_service();
+#else
 							s++;
 							if (s > (config.cheat?CHEAT_VIEWS:NORMAL_VIEWS)-1) s = (config.cheat?NORMAL_VIEWS+1:0);
+#endif
 							display(FX_FADE);
 							break;
+						case SDLK_i:
 						case SDLK_F4:
 						case PSP_BUTTON_A:
 							config.show_info = !config.show_info;
@@ -1222,6 +1629,24 @@ void loop()
 						case PSP_BUTTON_START:
 							menu();
 							display(FX_FADE);
+							break;
+						case SDLK_c:
+                                                        config.follow_gps = !config.follow_gps;
+							break;
+						case SDLK_d:
+                                                        directions();
+							break;
+						case SDLK_g:
+                                                        go();
+							break;
+						case SDLK_k:
+                                                        config.show_kml = !config.show_kml;
+							display(FX_NONE);
+							break;
+						case SDLK_o:
+                                                        netOff = !netOff;
+							if (!netOff) /* clear memory cache */
+							  bzero(memory, sizeof(memory));
 							break;
 						default:
 							break;
@@ -1278,6 +1703,29 @@ void loop()
 				display(FX_NONE);
 			}
 		}
+		#else
+		if (gps_loaded && config.follow_gps)
+		{
+			extern int GPS_get_fix(float *latitude, float *longitude);
+                        static int gps_ctr = 0;
+			float latitude, longitude;
+                        gps_ctr++;
+                        gps_ctr &= 0xf; // For get_fix: 0 = no connection, 1 = no fix.
+			if ((gps_ctr == 0) && (GPS_get_fix(&latitude, &longitude) > 1))
+			{
+                                static float save_lat = 0.0;
+                                static float save_lon = 0.0;
+                                if ((save_lat != latitude) || (save_lon != longitude)) {
+                                    save_lat = latitude;
+                                    save_lon = longitude;
+                                    latlon2xy(latitude, longitude, &x, &y, z);
+                                    dx = 0;
+                                    dy = 0;
+                                    display(FX_NONE);
+                                }
+			}
+
+		}
 		#endif
 		
 		x += dx;
@@ -1312,6 +1760,30 @@ int gpsLoad()
 
 int main(int argc, char *argv[])
 {
+  int i;
+  int favNum = -1;
+  char *favNam = NULL;
+  for (i = 1; i < argc; i++) {
+    if (argv[i][0] == '-') {
+      switch (argv[i][1])
+      {
+      case 'o':
+	netOff = 1;
+	break;
+      case 'f':
+	if (isdigit(argv[i][2]))
+	  favNum = atoi(&(argv[i][2]));
+	else if (++i < argc)
+	  favNum = atoi(argv[i]);
+	favNum--; // Convert from 1 based to 0 based.
+	break;
+      }
+    }
+    else {
+      favNam = argv[i];
+    }
+  } 
+
 	#ifdef _PSP_FW_VERSION
 	pspDebugScreenInit();
 	motion_loaded = motionLoad() >= 0;
@@ -1322,8 +1794,11 @@ int main(int argc, char *argv[])
 	SetupCallbacks();
 	setupGu();
 	netDialog();
+	#else
+	extern int GPS_load(void);
+	gps_loaded = GPS_load() >= 0;
 	#endif
-	init();
+	init(favNum);
 	loop();
 	return 0;
 }

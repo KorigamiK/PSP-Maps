@@ -216,6 +216,56 @@ SDL_Surface *getdisk(int x, int y, int z, int s)
 	return NULL;
 }
 
+#if 1 /* ZIPIT_Z2 ENABLE_OFFLINE */
+/* offline directory names for view types */
+char *_offline[CHEAT_VIEWS] = {
+	"Google/OSM_tiles",             // "Google Maps / Map",
+	"Google/OSM_sat_tiles",         // "Google Maps / Satellite",
+	"Google/OSM_hyb_tiles",         // "Google Maps / Hybrid",
+	"Google/OSM_ter_tiles",         // "Google Maps / Terrain",
+	"Virtual_Earth/OSM_tiles",      // "Virtual Earth / Road",
+	"Virtual_Earth/OSM_sat_tiles",  // "Virtual Earth / Aerial",
+	"Virtual_Earth/OSM_hyb_tiles",  // "Virtual Earth / Hybrid",
+	"Virtual_Earth/OSM_ter_tiles",  // "Virtual Earth / Hill",
+	"Yahoo/OSM_tiles",              // "Yahoo! Maps / Map",
+	"Yahoo/OSM_sat_tiles",          // "Yahoo! Maps / Satellite",
+	"Yahoo/OSM_hyb_tiles",          // "Yahoo! Maps / Hybrid",
+	"OpenStreetMap/OSM_tiles",      // "OpenStreetMap / Mapnik",
+	"CloudMade/OSM_tiles",          // "OpenStreetMap / CloudMade",
+	"OpenCycleMap/OSM_tiles",       // "OpenCycleMap / Map",
+	"OpenCycleMap/OSM_chart_tiles", // "OpenCycleMap / Transport",
+	"MapQuest/OSM_tiles",           // "MapQuest / Map",
+	"MapQuest/OSM_sat_tiles",       // "MapQuest / Open Aerial",
+	"", // "",
+	"Google_Moon/Apollo",
+	"Google_Moon/Clem_BW",
+	"Google_Moon/Elevation",
+	"Google_Mars/Visible",
+	"Google_Mars/Elevation",
+	"Google_Mars/Infrared",
+	"Google_Sky/Visible",
+	"Google_Sky/Infrared",
+	"Google_Sky/Microwave",
+	"Google_Sky/Historical",
+};
+
+/* return the tile from OSM_tiles offline folder if available, or NULL */
+SDL_Surface *getoffline(int x, int y, int z, int s)
+{
+	SDL_Surface *offline;
+	char name[256];
+
+	// Look for OSM_TILES formatted dir dumped by gmapcatcher.
+	//printf("getoffline(%d, %d, %d, %d)\n", x, y, z, s);
+	if ((_offline[s] == NULL) || !strlen(_offline[s]))
+		return NULL;
+	sprintf(name, "offline/%s/%d/%d/%d.png", _offline[s], 17-z, x, y);
+	offline = IMG_Load(name);
+	// if (offline)	printf("GOToffline(%d, %d, %d, %d)\n", x, y, z, s);
+	return offline;
+}
+#endif
+
 /* return the tile from memory if available, or NULL */
 SDL_Surface *getmemory(int x, int y, int z, int s)
 {
@@ -238,13 +288,31 @@ SDL_Surface* gettile(int x, int y, int z, int s)
 	if ((tile = getmemory(x, y, z, s)) != NULL)
 		return tile;
 	
+#if 1 /* ZIPIT_Z2 ENABLE_OFFLINE */
+	/* try disk offline (BEFORE disk cache, for now) */
+	if ((tile = getoffline(x, y, z, s)) != NULL)
+	{
+		savememory(x, y, z, s, tile);
+		return tile;
+	}
+#endif
+	
 	/* try disk cache */
 	if ((tile = getdisk(x, y, z, s)) != NULL)
 	{
 		savememory(x, y, z, s, tile);
 		return tile;
 	}
-	
+
+        extern int netOff;
+        
+	if (netOff) {
+            tile = zoomSurface(na, 1, 1, 0);
+            // This would be faster, but does not reload if we turn netON.
+            savememory(x, y, z, s, tile);
+            return tile;
+        }
+
 	/* try internet */
 	rw = getnet(x, y, z, s);
 	
