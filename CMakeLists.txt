@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 2.8.14)
 # Make sure it's an out-of-stream build
 IF(${CMAKE_CURRENT_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
 	MESSAGE(FATAL_ERROR "Please invoke CMake from a different directory than the source.")
@@ -16,6 +16,7 @@ SET(
    global.c
    kml.c
    pspmaps.c
+   gpsplugin.c
 )
 MESSAGE(STATUS "Searching for system packages.")
 Find_Package(SDL REQUIRED)
@@ -70,6 +71,6 @@ link_libraries(
    ${LIBXML2_LIBRARIES}
    ${CURL_LIBRARY}
    ${MY_MATH_LIB}
-   pspmaps
+   # pspmaps
 )
 add_executable(pspmaps ${SOURCES})

@@ -1,6 +1,11 @@
 {
-    "workbench.colorCustomizations": {
-        "editor.selectionBackground": "#75542880",
-        "editor.selectionHighlightBackground": "#5f4444"
-    }
+  "workbench.colorCustomizations": {
+    "editor.selectionBackground": "#75542880",
+    "editor.selectionHighlightBackground": "#5f4444"
+  },
+  "cmake.configureOnOpen": true,
+  "files.associations": {
+    "sdl_image.h": "c",
+    "gps.h": "c"
+  }
 }

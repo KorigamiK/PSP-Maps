@@ -17,29 +17,33 @@ char txtbuf[32768];
 char *desc2txt(char *s)
 {
 	static char buf[1032];
-	int i,j,k;
-	char *p,*q;
+	int i, j, k;
+	char *p, *q;
 
-	strncpy(buf,s,1031);
+	strncpy(buf, s, 1031);
 	buf[1031] = 0;
 	p = buf;
-	while (p = strstr(p, "&#160;")){
+	while (p = strstr(p, "&#160;"))
+	{
 		*p++ = ' ';
-		q =p+5;
-		strcpy(p,q);
+		q = p + 5;
+		strcpy(p, q);
 	}
-	return(buf);
+	return (buf);
 }
 
 char *kml2txt(char *s)
 {
 	static char buf[1032];
-	int i,j,k;
-	char *p,*q;
+	int i, j, k;
+	char *p, *q;
 
-	j = strlen(s); if (j >1031) j = 1031;
+	j = strlen(s);
+	if (j > 1031)
+		j = 1031;
 	q = buf;
-	for (p = s; p<s+j; p++){
+	for (p = s; p < s + j; p++)
+	{
 		if ((*p == '('))
 			*q++ = '\n';
 		// Should look for "Partial toll road", "Toll road", "Speed camera"
@@ -47,27 +51,27 @@ char *kml2txt(char *s)
 		*q++ = *p;
 	}
 	*q = 0;
-	return(buf);
+	return (buf);
 }
 
 void placemark_parse(xmlNode *node, Placemark *place)
 {
 	xmlNode *cur, *cur2;
-	
+
 	for (cur = node->children; cur; cur = cur->next)
 	{
-		if (strcmp((char *) cur->name, "name") == 0)
-			place->name = strdup((char *) cur->children->content);
-		if (strcmp((char *) cur->name, "description") == 0)
-			place->description = strdup((char *) cur->children->content);
-		if (strcmp((char *) cur->name, "Point") == 0)
+		if (strcmp((char *)cur->name, "name") == 0)
+			place->name = strdup((char *)cur->children->content);
+		if (strcmp((char *)cur->name, "description") == 0)
+			place->description = strdup((char *)cur->children->content);
+		if (strcmp((char *)cur->name, "Point") == 0)
 		{
-			char *s = txtbuf+strlen(txtbuf);
+			char *s = txtbuf + strlen(txtbuf);
 			if (place->name)
-				sprintf(s+strlen(s),"%s\n",kml2txt(place->name));
-			if (place->description) 
-				sprintf(s+strlen(s)," %s\n",desc2txt(place->description));
-			//printf(s);
+				sprintf(s + strlen(s), "%s\n", kml2txt(place->name));
+			if (place->description)
+				sprintf(s + strlen(s), " %s\n", desc2txt(place->description));
+			// printf(s);
 
 			/* parse point */
 			place->type = PLACEMARK_POINT;
@@ -76,21 +80,21 @@ void placemark_parse(xmlNode *node, Placemark *place)
 			/* scan for coordinates */
 			for (cur2 = cur->children; cur2; cur2 = cur2->next)
 			{
-				if (strcmp((char *) cur2->name, "coordinates") == 0)
-					sscanf((char *) cur2->children->content, "%f,%f,", &place->point->lon, &place->point->lat);
+				if (strcmp((char *)cur2->name, "coordinates") == 0)
+					sscanf((char *)cur2->children->content, "%f,%f,", &place->point->lon, &place->point->lat);
 			}
 		}
-		if (strcmp((char *) cur->name, "GeometryCollection") == 0)
+		if (strcmp((char *)cur->name, "GeometryCollection") == 0)
 		{
 			/* parse line */
 			place->type = PLACEMARK_LINE;
 			place->line = strdup("");
 			/* scan for lines */
 			for (cur2 = cur->children; cur2; cur2 = cur2->next)
-				if (strcmp((char *) cur2->name, "LineString") == 0)
+				if (strcmp((char *)cur2->name, "LineString") == 0)
 				{
-					place->line = realloc(place->line, strlen(place->line) + strlen((char *) cur2->children->children->content) + 1);
-					strcat(place->line, (char *) cur2->children->children->content);
+					place->line = realloc(place->line, strlen(place->line) + strlen((char *)cur2->children->children->content) + 1);
+					strcat(place->line, (char *)cur2->children->children->content);
 				}
 		}
 	}
@@ -115,30 +119,30 @@ void kml_parse(char *file)
 		DEBUG("KML error: no root element!\n");
 		return;
 	}
-	
+
 	/* check the XML document starts with the KML node */
-	if (strcmp((char *) node->name, "kml"))
+	if (strcmp((char *)node->name, "kml"))
 	{
 		DEBUG("KML error: no kml root element!\n");
 		return;
 	}
 	node = node->children;
-	
+
 	/* skip Document and Folder nodes */
-	while (node && (strcmp((char *) node->name, "Document") == 0 || strcmp((char *) node->name, "Folder") == 0))
+	while (node && (strcmp((char *)node->name, "Document") == 0 || strcmp((char *)node->name, "Folder") == 0))
 		node = node->children;
-	
+
 	/* scan Placemarks */
 	for (cur = node; cur; cur = cur->next)
-		if (strcmp((char *) cur->name, "Placemark") == 0)
+		if (strcmp((char *)cur->name, "Placemark") == 0)
 		{
-			Placemark *tmp = calloc(1,sizeof(Placemark));
+			Placemark *tmp = calloc(1, sizeof(Placemark));
 			placemark_parse(cur, tmp);
 			tmp->next = places;
 			places = tmp;
 		}
-	strcat(txtbuf," \n");
-	
+	strcat(txtbuf, " \n");
+
 	xmlFreeDoc(doc);
 #endif
 }
@@ -156,7 +160,7 @@ void kml_load()
 
 	/* default marker */
 	default_marker = IMG_Load("data/marker.png");
-	
+
 	/* parse the kml directory */
 	if ((directory = opendir("kml/")) != NULL)
 		while ((entry = readdir(directory)) != NULL)
@@ -170,7 +174,8 @@ void kml_load()
 				DEBUG("kml_parse(\"%s\")\n", file);
 				marker = IMG_Load(file);
 				/* if not available, default marker */
-				if (marker == NULL) marker = default_marker;
+				if (marker == NULL)
+					marker = default_marker;
 				/* load KML file */
 				sprintf(file, "kml/%s.kml", entry->d_name);
 				kml_parse(file);

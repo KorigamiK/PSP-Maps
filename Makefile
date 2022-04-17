@@ -1,14 +1,14 @@
 CC ?= gcc
 CFLAGS += -O2 -g -Wall `sdl-config --cflags` `curl-config --cflags`
-LIBS += -lSDL_image -lSDL_gfx -lSDL_ttf `sdl-config --libs` `curl-config --libs` $(LDFLAGS) -lm
+LIBS += -lSDL_image -lSDL_gfx -lSDL_ttf `sdl-config --libs` `curl-config --libs` $(LDFLAGS) -lm -lgps
 PREFIX ?= /usr/local
-DESTDIR ?= 
+DESTDIR ?= ./build
 
 .PHONY: all install uninstall clean
 
 all: pspmaps
 
-pspmaps: pspmaps.c $(ICON) global.o kml.o tile.c io.c cJSON.o
+pspmaps: pspmaps.c $(ICON) global.o kml.o tile.c io.c cJSON.o gpsplugin.c gpsplugin.h
 	$(CC) $(CFLAGS) -o pspmaps$(EXEEXT) pspmaps.c $(ICON) global.o kml.o cJSON.o $(LIBS)
 
 global.o: global.c global.h
