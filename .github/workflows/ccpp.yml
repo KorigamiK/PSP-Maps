@@ -16,6 +16,7 @@ jobs:
       run: |
         mkdir build
         cd build
+        ln -s /usr/include/libxml2/libxml /usr/include/
         cmake ..
     - name: make
       run: make
